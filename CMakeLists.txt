@@ -5,6 +5,7 @@ project(gpr_use_test LANGUAGES CXX)
 include(CTest)
 
 find_package(Eigen3 3.3 REQUIRED NO_MODULE)
+find_package(Threads REQUIRED)
 
 # Override from the command line with -DLBFGSPP_ROOT=/path/to/LBFGSpp.
 set(LBFGSPP_ROOT "$ENV{HOME}/lib/LBFGSpp" CACHE PATH
@@ -12,6 +13,17 @@ set(LBFGSPP_ROOT "$ENV{HOME}/lib/LBFGSpp" CACHE PATH
 find_path(LBFGSPP_INCLUDE_DIR
     NAMES LBFGSB.h
     HINTS "${LBFGSPP_ROOT}/include"
+    REQUIRED
+)
+
+# fast-cpp-csv-parser is a header-only library.
+set(FAST_CPP_CSV_PARSER_ROOT
+    "$ENV{HOME}/lib/fast-cpp-csv-parser"
+    CACHE PATH
+    "Path to the fast-cpp-csv-parser source directory")
+find_path(FAST_CPP_CSV_PARSER_INCLUDE_DIR
+    NAMES csv.h
+    HINTS "${FAST_CPP_CSV_PARSER_ROOT}"
     REQUIRED
 )
 
@@ -33,7 +45,23 @@ target_include_directories(surrogate
 target_link_libraries(surrogate PUBLIC Eigen3::Eigen)
 
 add_executable(gpr_test main.cpp)
-target_link_libraries(gpr_test PRIVATE surrogate)
+target_include_directories(gpr_test
+    PRIVATE
+        "${FAST_CPP_CSV_PARSER_INCLUDE_DIR}"
+)
+target_link_libraries(
+    gpr_test
+    PRIVATE
+        surrogate
+        Threads::Threads
+)
+
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/data")
+configure_file(
+    data/hybrid_training_4d.csv
+    data/hybrid_training_4d.csv
+    COPYONLY
+)
 
 add_executable(
     hybrid_regression_example

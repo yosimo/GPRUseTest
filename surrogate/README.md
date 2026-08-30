@@ -31,6 +31,8 @@ LBFGS++、cereal を利用可能にしてください。
 4次元の実行例は
 [main.cpp](../main.cpp)および
 [hybrid_regression_example.cpp](../examples/hybrid_regression_example.cpp)
-にあります。
+にあります。`main.cpp`は
+[テスト用CSV](../data/hybrid_training_4d.csv)を読み込んで学習し、
+別のCSVファイルもコマンドライン引数で指定できます。
 
 ハイブリッドモデルの保存・読み込みは現在未実装です。

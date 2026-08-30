@@ -14,7 +14,55 @@ $$
 
 現在利用できるトレンドモデルは`PolynomialTrendModel`です。設定により、1次重回帰または2次多項式回帰を選択できます。係数推定にはRidge回帰を使用できます。
 
-## 学習の流れ
+## 全体の設定・実行フロー
+
+ハイブリッド回帰を使用するときは、次の順序でデータと2種類のモデル設定を準備します。
+
+| 順序 | 設定・処理 | 目的 |
+|---:|---|---|
+| 1 | 入力次元とCSV列を決める | 入力`x1...xD`と目的値`y`の対応を固定する |
+| 2 | 学習データを`RegressionDataset`へ変換する | 行数、次元、有限値を検証する |
+| 3 | `PolynomialTrendConfig`を設定する | 大域的傾向と外挿時の基本形を決める |
+| 4 | `GaussianProcessConfig`を設定する | トレンドで説明できない局所残差の学習方法を決める |
+| 5 | `HybridRegressionModel`を構築する | トレンドモデルと残差GPRを合成する |
+| 6 | `fit()`を呼ぶ | トレンド、残差バイアス、残差GPRの順で学習する |
+| 7 | `predict()`または`predictWithGradients()`を呼ぶ | 合成平均、分散、必要なら勾配を得る |
+| 8 | 内挿・外挿を別々に評価する | トレンド次数やGPR設定を選択する |
+
+コード上の大きな流れは次のとおりです。
+
+```cpp
+// 1、2: 入力と目的値を用意し、検証済みデータセットにする。
+RegressionDataset dataset(training_inputs, training_targets);
+
+// 3: 先に大域トレンドを設定する。
+PolynomialTrendConfig trend_config;
+trend_config.degree = PolynomialDegree::LINEAR;
+trend_config.ridge_lambda = 1.0e-8;
+
+// 4: 次に局所残差を学習するGPRを設定する。
+GaussianProcessConfig residual_config;
+residual_config.kernel = KernelType::MATERN_5_2;
+residual_config.length_scales.values =
+    Eigen::VectorXd::Ones(dataset.inputDimension());
+
+// 5: 2つのモデルを合成する。
+HybridRegressionModel model(
+    std::make_unique<PolynomialTrendModel>(trend_config),
+    residual_config);
+
+// 6: 学習する。残差の計算はHybridRegressionModelが内部で行う。
+model.fit(dataset);
+
+// 7: 元の入力スケールで予測する。
+const Prediction prediction = model.predict(test_inputs);
+```
+
+設定時は、まず1次トレンドを基準にし、その後で2次項、交互作用項、Ridge強度を検討します。残差GPRのカーネルやlength scaleはその後に調整します。先にGPRを細かく調整すると、本来トレンドが担当すべき大域変化までGPRが吸収し、役割分担を判断しにくくなるためです。
+
+ARDを有効にしてlength scaleの初期値をベクトルで指定する場合、その要素数は入力次元`D`と一致させます。トレンドとGPRはそれぞれ入力変換状態を内部に保持するため、呼び出し側は常に元の入力値を渡します。
+
+## fit内部の学習順序
 
 `HybridRegressionModel::fit()`は内部で次の処理を行います。
 
@@ -25,6 +73,49 @@ $$
 5. 平均を除いた残差を`GaussianProcess`で学習する
 
 残差を平均ゼロに調整するため、学習点から十分離れてGPRの補正が小さくなると、予測平均はトレンドモデルと残差バイアスへ近づきます。
+
+## CSVを使用するmainサンプル
+
+`main.cpp`は、CSVファイルから4次元の学習データを読み込んでハイブリッドモデルを学習します。CSVの各行は次の5列です。
+
+```text
+x1,x2,x3,x4,y
+```
+
+先頭行には同じ内容のヘッダを付けることができます。ヘッダを付けない場合は、1行目から数値データとして読み込みます。列の並びは固定で、各値は有限の数値である必要があります。
+
+テスト用データは次のファイルです。
+
+```text
+data/hybrid_training_4d.csv
+```
+
+リポジトリのルートから引数なしで実行すると、このファイルを読み込みます。
+
+```bash
+./build/gpr_test
+```
+
+別のCSVを使用する場合は、ファイルパスを第1引数へ指定します。
+
+```bash
+./build/gpr_test path/to/training_data.csv
+```
+
+CMake構成時にテスト用CSVは`build/data/`にもコピーされるため、buildディレクトリから実行することもできます。
+
+CSVの読み込みには`fast-cpp-csv-parser`を使用します。既定では次の場所から`csv.h`を検索します。
+
+```text
+$HOME/lib/fast-cpp-csv-parser
+```
+
+別の場所へ配置した場合は、CMake構成時に指定してください。
+
+```bash
+cmake -S . -B build \
+  -DFAST_CPP_CSV_PARSER_ROOT=/path/to/fast-cpp-csv-parser
+```
 
 ## 基本的な使い方
 
