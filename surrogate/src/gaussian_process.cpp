@@ -2,6 +2,7 @@
 
 #include <bayesian_optimization/surrogate/error.hpp>
 #include <bayesian_optimization/surrogate/gaussian_process.hpp>
+#include <bayesian_optimization/surrogate/input_transform.hpp>
 
 #include <Eigen/Cholesky>
 #include <Eigen/Core>
@@ -50,38 +51,6 @@ bool isEffectivelyZero(double scale, double reference)
                         std::max(1.0, std::abs(reference));
 }
 
-TransformState fitInputTransform(
-    const Eigen::MatrixXd& inputs,
-    const PreprocessingConfig& config)
-{
-    TransformState result;
-    const Eigen::Index dimension = inputs.cols();
-    result.offset = Eigen::VectorXd::Zero(dimension);
-    result.scale = Eigen::VectorXd::Ones(dimension);
-
-    if (config.input_transform == InputTransformType::STANDARDIZE)
-    {
-        result.offset = inputs.colwise().mean();
-        for (Eigen::Index column = 0; column < dimension; ++column)
-        {
-            const double variance =
-                (inputs.col(column).array() - result.offset(column))
-                    .square()
-                    .mean();
-            const double scale = std::sqrt(std::max(0.0, variance));
-            result.scale(column) =
-                isEffectivelyZero(scale, result.offset(column)) ? 1.0 : scale;
-        }
-    }
-    else if (config.input_transform == InputTransformType::MIN_MAX)
-    {
-        result.offset = *config.input_lower_bounds;
-        result.scale =
-            *config.input_upper_bounds - *config.input_lower_bounds;
-    }
-    return result;
-}
-
 TransformState fitOutputTransform(
     const Eigen::VectorXd& targets,
     OutputTransformType type)
@@ -98,16 +67,6 @@ TransformState fitOutputTransform(
         result.scale(0) =
             isEffectivelyZero(scale, result.offset(0)) ? 1.0 : scale;
     }
-    return result;
-}
-
-Eigen::MatrixXd applyTransform(
-    const Eigen::MatrixXd& values,
-    const TransformState& transform)
-{
-    Eigen::MatrixXd result = values;
-    result.rowwise() -= transform.offset.transpose();
-    result.array().rowwise() /= transform.scale.transpose().array();
     return result;
 }
 
@@ -610,7 +569,7 @@ public:
     {
         State(
             RegressionDataset source_data,
-            TransformState input,
+            FittedInputTransform input,
             TransformState output,
             Eigen::MatrixXd transformed_inputs_value,
             Eigen::VectorXd transformed_targets_value,
@@ -627,7 +586,7 @@ public:
         }
 
         RegressionDataset data;
-        TransformState input_transform;
+        FittedInputTransform input_transform;
         TransformState output_transform;
         Eigen::MatrixXd transformed_inputs;
         Eigen::VectorXd transformed_targets;
@@ -645,13 +604,16 @@ public:
         SurrogateFitPolicy policy) const
     {
         config.validateForDimension(dataset.inputDimension());
-        const TransformState input =
-            fitInputTransform(dataset.inputs(), config.preprocessing);
+        const FittedInputTransform input = FittedInputTransform::fit(
+            dataset.inputs(),
+            config.preprocessing.input_transform,
+            config.preprocessing.input_lower_bounds,
+            config.preprocessing.input_upper_bounds);
         const TransformState output = fitOutputTransform(
             dataset.targets(),
             config.preprocessing.output_transform);
         Eigen::MatrixXd transformed_inputs =
-            applyTransform(dataset.inputs(), input);
+            input.apply(dataset.inputs());
         Eigen::VectorXd transformed_targets =
             applyOutputTransform(dataset.targets(), output);
 
@@ -751,7 +713,7 @@ PredictionWithGradients GaussianProcess::predictWithGradients(
     }
 
     const Eigen::MatrixXd transformed_test_inputs =
-        applyTransform(test_inputs, state.input_transform);
+        state.input_transform.apply(test_inputs);
     const Eigen::MatrixXd cross_covariance = kernelToTraining(
         state.transformed_inputs,
         transformed_test_inputs,
@@ -818,10 +780,11 @@ PredictionWithGradients GaussianProcess::predictWithGradients(
          ++dimension_index)
     {
         result.mean_gradient.col(dimension_index) *=
-            output_scale / state.input_transform.scale(dimension_index);
+            output_scale /
+            state.input_transform.scale()(dimension_index);
         result.latent_variance_gradient.col(dimension_index) *=
             (output_scale * output_scale) /
-            state.input_transform.scale(dimension_index);
+            state.input_transform.scale()(dimension_index);
     }
     return result;
 }

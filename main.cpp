@@ -2,65 +2,119 @@
 
 #include <Eigen/Core>
 
+#include <cmath>
 #include <iostream>
+#include <memory>
+#include <random>
 #include <sstream>
 #include <string>
 
 int main()
 {
-    using bayesian_optimization::surrogate::GaussianProcess;
     using bayesian_optimization::surrogate::GaussianProcessConfig;
+    using bayesian_optimization::surrogate::HybridRegressionModel;
     using bayesian_optimization::surrogate::HyperparameterMode;
     using bayesian_optimization::surrogate::InputTransformType;
     using bayesian_optimization::surrogate::KernelType;
     using bayesian_optimization::surrogate::OutputTransformType;
+    using bayesian_optimization::surrogate::PolynomialDegree;
+    using bayesian_optimization::surrogate::PolynomialTrendConfig;
+    using bayesian_optimization::surrogate::PolynomialTrendModel;
     using bayesian_optimization::surrogate::RegressionDataset;
     using bayesian_optimization::surrogate::ScalarHyperparameterConfig;
 
-    // y = x^2 の5点を学習データとして与える。
-    Eigen::MatrixXd training_inputs(5, 1);
-    training_inputs << -2.0, -1.0, 0.0, 1.0, 2.0;
+    constexpr Eigen::Index observation_count = 40;
+    constexpr Eigen::Index input_dimension = 4;
 
-    Eigen::VectorXd training_targets(5);
-    training_targets << 4.0, 1.0, 0.0, 1.0, 4.0;
+    // 4次元の線形トレンドに局所的な非線形成分を加えた学習データを生成する。
+    std::mt19937_64 random_engine(0);
+    std::uniform_real_distribution<double> distribution(-1.0, 1.0);
+    Eigen::MatrixXd training_inputs(
+        observation_count,
+        input_dimension);
+    for (Eigen::Index row = 0; row < training_inputs.rows(); ++row)
+    {
+        for (Eigen::Index column = 0;
+             column < training_inputs.cols();
+             ++column)
+        {
+            training_inputs(row, column) =
+                distribution(random_engine);
+        }
+    }
 
-    GaussianProcessConfig config;
+    Eigen::VectorXd training_targets =
+        Eigen::VectorXd::Constant(observation_count, 2.0);
+    training_targets.array() +=
+        1.5 * training_inputs.col(0).array();
+    training_targets.array() -=
+        0.8 * training_inputs.col(1).array();
+    training_targets.array() +=
+        0.3 * training_inputs.col(2).array();
+    training_targets.array() +=
+        0.5 * training_inputs.col(3).array();
+    training_targets.array() +=
+        0.2 *
+        (3.0 * training_inputs.col(0).array() *
+         training_inputs.col(1).array())
+            .sin();
 
-    // カーネルとARDを設定する。
-    config.kernel = KernelType::MATERN_5_2;
-    config.use_ard = true;
+    // 大域的な傾向を1次のRidge回帰で学習する。
+    PolynomialTrendConfig trend_config;
+    trend_config.degree = PolynomialDegree::LINEAR;
+    trend_config.include_interactions = false;
+    trend_config.ridge_lambda = 1.0e-8;
+    trend_config.input_transform =
+        InputTransformType::STANDARDIZE;
 
-    // ハイパーパラメータの初期値と探索範囲を設定する。
-    config.length_scales.mode = HyperparameterMode::OPTIMIZE;
-    config.length_scales.values =
-        Eigen::VectorXd::Ones(training_inputs.cols());
-    config.length_scales.lower_bound = 1.0e-3;
-    config.length_scales.upper_bound = 1.0e3;
-    config.signal_variance =
-        ScalarHyperparameterConfig::optimized(1.0, 1.0e-6, 1.0e3);
-    config.noise_variance =
-        ScalarHyperparameterConfig::optimized(1.0e-6, 1.0e-10, 1.0e1);
+    // Ridge回帰で説明できない残差をGPRで学習する。
+    GaussianProcessConfig residual_config;
+    residual_config.kernel = KernelType::MATERN_5_2;
+    residual_config.use_ard = true;
 
-    // 入出力を標準化する。
-    config.preprocessing.input_transform = InputTransformType::STANDARDIZE;
-    config.preprocessing.output_transform = OutputTransformType::STANDARDIZE;
+    residual_config.length_scales.mode =
+        HyperparameterMode::OPTIMIZE;
+    residual_config.length_scales.values =
+        Eigen::VectorXd::Ones(input_dimension);
+    residual_config.length_scales.lower_bound = 1.0e-3;
+    residual_config.length_scales.upper_bound = 1.0e3;
+    residual_config.signal_variance =
+        ScalarHyperparameterConfig::optimized(
+            1.0,
+            1.0e-6,
+            1.0e3);
+    residual_config.noise_variance =
+        ScalarHyperparameterConfig::optimized(
+            1.0e-6,
+            1.0e-10,
+            1.0e1);
 
-    // ハイパーパラメータ最適化を設定する。
-    config.hyperparameter_optimization.restart_count = 5;
-    config.hyperparameter_optimization.max_iterations = 200;
-    config.hyperparameter_optimization.gradient_tolerance = 1.0e-6;
-    config.hyperparameter_optimization.random_seed = 0;
+    residual_config.preprocessing.input_transform =
+        InputTransformType::STANDARDIZE;
+    residual_config.preprocessing.output_transform =
+        OutputTransformType::STANDARDIZE;
 
-    // Cholesky分解を安定化するjitterを設定する。
-    config.jitter.initial_relative_value = 1.0e-10;
-    config.jitter.multiplier = 10.0;
-    config.jitter.max_attempts = 8;
+    residual_config.hyperparameter_optimization.restart_count = 5;
+    residual_config.hyperparameter_optimization.max_iterations = 200;
+    residual_config.hyperparameter_optimization.gradient_tolerance =
+        1.0e-6;
+    residual_config.hyperparameter_optimization.random_seed = 0;
 
-    GaussianProcess model(config);
-    model.fit(RegressionDataset(training_inputs, training_targets));
+    residual_config.jitter.initial_relative_value = 1.0e-10;
+    residual_config.jitter.multiplier = 10.0;
+    residual_config.jitter.max_attempts = 8;
 
-    std::cout << "モデルの学習が完了しました。\n"
-              << "予測したい x の値を入力してください（q で終了）。\n";
+    HybridRegressionModel model(
+        std::make_unique<PolynomialTrendModel>(trend_config),
+        residual_config);
+    model.fit(RegressionDataset(
+        training_inputs,
+        training_targets));
+
+    std::cout
+        << "4次元ハイブリッドモデルの学習が完了しました。\n"
+        << "x1 x2 x3 x4 の4値を空白区切りで入力してください"
+        << "（q で終了）。\n";
 
     std::string line;
     while (true)
@@ -73,25 +127,38 @@ int main()
         }
 
         std::istringstream input(line);
-        double value = 0.0;
+        Eigen::RowVector4d point;
         char extra = '\0';
-        if (!(input >> value) || (input >> extra))
+        if (!(input >> point(0) >> point(1) >>
+              point(2) >> point(3)) ||
+            (input >> extra))
         {
-            std::cout << "数値、または終了キー q を入力してください。\n";
+            std::cout
+                << "4個の数値、または終了キー q を入力してください。\n";
             continue;
         }
 
-        Eigen::MatrixXd test_inputs(1, 1);
-        test_inputs << value;
-        const auto prediction = model.predict(test_inputs);
+        Eigen::MatrixXd test_inputs(1, input_dimension);
+        test_inputs.row(0) = point;
 
-        std::cout << "x = " << value << '\n'
-                  << "predicted mean = " << prediction.mean(0) << '\n'
-                  << "latent variance = " << prediction.latent_variance(0)
-                  << '\n';
+        const auto prediction = model.predict(test_inputs);
+        const double trend_prediction =
+            model.trendModel().predict(test_inputs)(0) +
+            model.residualBias();
+        const double residual_prediction =
+            model.residualModel().predict(test_inputs).mean(0);
+
+        std::cout
+            << "trend mean = " << trend_prediction << '\n'
+            << "GPR residual mean = " << residual_prediction << '\n'
+            << "hybrid predicted mean = "
+            << prediction.mean(0) << '\n'
+            << "latent variance = "
+            << prediction.latent_variance(0) << '\n'
+            << "observation variance = "
+            << prediction.observation_variance(0) << '\n';
     }
 
     std::cout << "終了します。\n";
-
     return 0;
 }
