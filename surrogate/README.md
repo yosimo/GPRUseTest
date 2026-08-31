@@ -32,7 +32,9 @@ LBFGS++、cereal を利用可能にしてください。
 [main.cpp](../main.cpp)および
 [hybrid_regression_example.cpp](../examples/hybrid_regression_example.cpp)
 にあります。`main.cpp`は
-[テスト用CSV](../data/hybrid_training_4d.csv)を読み込んで学習し、
-別のCSVファイルもコマンドライン引数で指定できます。
+[学習用CSV](../data/hybrid_training_4d.csv)を読み込み、大域トレンド単体、
+GPR単体、ハイブリッドを比較します。
+[テスト入力CSV](../data/hybrid_test_4d.csv)を第2引数に指定すると、
+全テスト点の3モデル予測を一括出力できます。
 
 ハイブリッドモデルの保存・読み込みは現在未実装です。

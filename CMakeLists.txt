@@ -7,25 +7,24 @@ include(CTest)
 find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 find_package(Threads REQUIRED)
 
-# Override from the command line with -DLBFGSPP_ROOT=/path/to/LBFGSpp.
-set(LBFGSPP_ROOT "$ENV{HOME}/lib/LBFGSpp" CACHE PATH
-    "Path to the LBFGSpp source directory")
-find_path(LBFGSPP_INCLUDE_DIR
-    NAMES LBFGSB.h
-    HINTS "${LBFGSPP_ROOT}/include"
-    REQUIRED
-)
+# The target environment is offline. Third-party headers are expected at
+# fixed locations below $HOME/lib; CMake does not search or download them.
+set(LOCAL_LIBRARY_ROOT "$ENV{HOME}/lib")
+set(LBFGSPP_INCLUDE_DIR
+    "${LOCAL_LIBRARY_ROOT}/LBFGSpp/include")
+set(FAST_CPP_CSV_PARSER_INCLUDE_DIR
+    "${LOCAL_LIBRARY_ROOT}/fast-cpp-csv-parser")
 
-# fast-cpp-csv-parser is a header-only library.
-set(FAST_CPP_CSV_PARSER_ROOT
-    "$ENV{HOME}/lib/fast-cpp-csv-parser"
-    CACHE PATH
-    "Path to the fast-cpp-csv-parser source directory")
-find_path(FAST_CPP_CSV_PARSER_INCLUDE_DIR
-    NAMES csv.h
-    HINTS "${FAST_CPP_CSV_PARSER_ROOT}"
-    REQUIRED
-)
+if(NOT EXISTS "${LBFGSPP_INCLUDE_DIR}/LBFGSB.h")
+    message(FATAL_ERROR
+        "Local LBFGS++ header was not found: "
+        "${LBFGSPP_INCLUDE_DIR}/LBFGSB.h")
+endif()
+if(NOT EXISTS "${FAST_CPP_CSV_PARSER_INCLUDE_DIR}/csv.h")
+    message(FATAL_ERROR
+        "Local fast-cpp-csv-parser header was not found: "
+        "${FAST_CPP_CSV_PARSER_INCLUDE_DIR}/csv.h")
+endif()
 
 add_library(surrogate STATIC
     surrogate/src/config.cpp
@@ -60,6 +59,11 @@ file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/data")
 configure_file(
     data/hybrid_training_4d.csv
     data/hybrid_training_4d.csv
+    COPYONLY
+)
+configure_file(
+    data/hybrid_test_4d.csv
+    data/hybrid_test_4d.csv
     COPYONLY
 )
 
